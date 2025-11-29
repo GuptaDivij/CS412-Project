@@ -17,7 +17,7 @@ pip install pandas numpy scikit-learn xgboost lightgbm
 ### 2. Run the Pipeline
 
 ```bash
-python code.py
+python ml_pipeline.py
 ```
 
 **Runtime:** 3-5 minutes
