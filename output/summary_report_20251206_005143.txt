@@ -2,19 +2,19 @@
 NCAA MARCH MADNESS PREDICTION - RESULTS SUMMARY
 ============================================================
 
-Timestamp: 2025-11-23 15:37:34
-Validation Set: 67 games
-Validation Seasons: [np.int64(2023)]
+Timestamp: 2025-12-06 00:51:43
+Validation Set: 200 games
+Validation Seasons: [np.int64(2021), np.int64(2022), np.int64(2023)]
 
 ------------------------------------------------------------
 Model                Log Loss     Accuracy     AUC         
 ------------------------------------------------------------
-Logistic Regression  0.6894       0.5672       0.6231      
-XGBoost              0.7559       0.4776       0.4963      
-LightGBM             0.7615       0.4776       0.5056      
+Logistic Regression  0.6404       0.6550       0.7131      
+XGBoost              0.6236       0.6550       0.7167      
+LightGBM             0.6314       0.6650       0.7121      
 ------------------------------------------------------------
 
-🏆 Best Model: Logistic Regression
-   Log Loss: 0.6894
-   Accuracy: 0.5672
-   AUC: 0.6231
+[BEST] Model: XGBoost
+   Log Loss: 0.6236
+   Accuracy: 0.6550
+   AUC: 0.7167
