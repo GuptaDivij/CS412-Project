@@ -1,0 +1,93 @@
+{
+  "timestamp": "2025-12-08 00:41:29",
+  "ablation_study": {
+    "All Features": {
+      "n_features": 17,
+      "log_loss": 0.6235602983920312,
+      "accuracy": 0.655,
+      "auc": 0.7167467948717948
+    },
+    "Without Seeds": {
+      "n_features": 14,
+      "log_loss": 0.6544030363897025,
+      "accuracy": 0.62,
+      "auc": 0.6635116185897436
+    },
+    "Without WinPct": {
+      "n_features": 14,
+      "log_loss": 0.6278657909869589,
+      "accuracy": 0.67,
+      "auc": 0.7120392628205128
+    },
+    "Without Scoring": {
+      "n_features": 8,
+      "log_loss": 0.6324703773334245,
+      "accuracy": 0.69,
+      "auc": 0.7100360576923077
+    },
+    "Seeds Only": {
+      "n_features": 3,
+      "log_loss": 0.6280071417567403,
+      "accuracy": 0.68,
+      "auc": 0.7188501602564102
+    },
+    "Stats Only": {
+      "n_features": 14,
+      "log_loss": 0.6544030363897025,
+      "accuracy": 0.62,
+      "auc": 0.6635116185897436
+    }
+  },
+  "baseline_comparison": {
+    "Random": {
+      "log_loss": 0.6931471805599452,
+      "accuracy": 0.5,
+      "auc": 0.5
+    },
+    "Majority Class": {
+      "log_loss": 2.2157078639181043,
+      "accuracy": 0.52,
+      "auc": 0.5
+    },
+    "Seed-Only": {
+      "log_loss": 0.6298354716450889,
+      "accuracy": 0.68,
+      "auc": 0.7231570512820513
+    },
+    "Logistic Regression": {
+      "log_loss": 0.6403542050070758,
+      "accuracy": 0.655,
+      "auc": 0.7131410256410257
+    },
+    "XGBoost (Ours)": {
+      "log_loss": 0.6235602983920312,
+      "accuracy": 0.655,
+      "auc": 0.7167467948717948
+    },
+    "LightGBM (Ours)": {
+      "log_loss": 0.6313836824819246,
+      "accuracy": 0.665,
+      "auc": 0.7120893429487178
+    }
+  },
+  "cross_validation_stats": {
+    "Logistic Regression": {
+      "mean": 0.54712039109696,
+      "std": 0.018141479144312536,
+      "min": 0.5132022871964803,
+      "max": 0.5621556573573797
+    },
+    "XGBoost": {
+      "mean": 0.5546978283721902,
+      "std": 0.015047351941323834,
+      "min": 0.5308794603583137,
+      "max": 0.5768826039071454
+    },
+    "LightGBM": {
+      "mean": 0.5529831070962016,
+      "std": 0.01494009783060742,
+      "min": 0.5279859509771851,
+      "max": 0.5748513501486029
+    }
+  }
+}
