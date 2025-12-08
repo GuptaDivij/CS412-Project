@@ -11,16 +11,14 @@ import json
 import pickle
 from datetime import datetime
 import sys
-from typing import Optional, List
 
 import matplotlib
-matplotlib.use('Agg')  # Use non-interactive backend
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import seaborn as sns
 import xgboost as xgb
 import lightgbm as lgb
 
-# Set style
 try:
     plt.style.use('seaborn-v0_8' if 'seaborn-v0_8' in plt.style.available else 'default')
 except:
@@ -45,7 +43,6 @@ class MarchMadnessPreprocessor:
     self.data['massey_ordinals'] = pd.read_csv(self.data_dir / 'MMasseyOrdinals.csv')
     self.data['team_conferences'] = pd.read_csv(self.data_dir / 'MTeamConferences.csv')
     self.data['conference_tourney'] = pd.read_csv(self.data_dir / 'MConferenceTourneyGames.csv')
-    print('load data complete')
     return True
 
   def analyze_missing_values(self):
@@ -63,46 +60,23 @@ class MarchMadnessPreprocessor:
             print(missing_df)
     return True
 
-  def clean_data(self, verbose=True):
-    """
-    Minimal, table-agnostic cleaner:
-    - makes a clean copy of every loaded table
-    - trims strings (object cols) and converts empty strings to NA
-    - replaces non-finite values (±inf) with NA
-    - drops rows with ANY NA
-    - drops exact duplicates
-    Returns a dict of cleaned DataFrames and stores it in self.cleaned.
-    """
+  def clean_data(self, verbose=False):
     if not self.data:
         raise RuntimeError("No data loaded. Call load_data() first.")
 
     cleaned = {}
     for name, df in self.data.items():
         d = df.copy()
-
-        # 1) Trim whitespace in ALL object/string columns and normalize empties -> NA
         obj_cols = d.select_dtypes(include=["object"]).columns
         if len(obj_cols) > 0:
             d[obj_cols] = d[obj_cols].apply(lambda s: s.astype(str).str.strip())
             d[obj_cols] = d[obj_cols].replace({"": pd.NA, "nan": pd.NA, "None": pd.NA})
-
-        # 2) Replace non-finite numeric values (inf/-inf) with NA
         num_cols = d.select_dtypes(include=[np.number]).columns
         if len(num_cols) > 0:
             d[num_cols] = d[num_cols].replace([np.inf, -np.inf], pd.NA)
-
-        # 3) Drop rows with ANY NA (fully general)
-        before = len(d)
         d = d.dropna(how="any")
-
-        # 4) Drop exact duplicate rows
         d = d.drop_duplicates()
-
         cleaned[name] = d
-        if verbose:
-            after = len(d)
-            print(f"[{name}] kept {after:,} / {before:,} rows after NA-drop; "
-                  f"final {len(d):,} after de-dup.")
 
     self.cleaned = cleaned
     return cleaned
@@ -125,11 +99,9 @@ class MarchMadnessPreprocessor:
         avg_points_for = points_for / total_games if total_games > 0 else 0
         avg_points_against = points_against / total_games if total_games > 0 else 0
 
-        # Score differential
         score_diff = (wins['WScore'] - wins['LScore']).sum() - (losses['WScore'] - losses['LScore']).sum()
         avg_score_diff = score_diff / total_games if total_games > 0 else 0
 
-        # Home/Away performance
         home_wins = len(wins[wins['WLoc'].isin(['H', 'H1', 'H2'])])
         away_wins = len(wins[wins['WLoc'] == 'A'])
         neutral_wins = len(wins[wins['WLoc'] == 'N'])
@@ -156,13 +128,8 @@ class MarchMadnessPreprocessor:
     return season_stats
 
   def parse_seed(self, seed_str):
-    """
-    Parse seed string like 'W01' or 'X16a' into numeric seed (1-16).
-    Returns None if invalid.
-    """
     if pd.isna(seed_str) or not isinstance(seed_str, str):
         return None
-    # Remove region letter and any suffix (a/b for play-in)
     seed_num = ''.join(c for c in seed_str[1:] if c.isdigit())
     try:
         return int(seed_num)
@@ -170,7 +137,6 @@ class MarchMadnessPreprocessor:
         return None
 
   def get_team_seed(self, season, team_id):
-    """Get tournament seed for a team in a given season."""
     seeds = self.data['tourney_seeds']
     seed_row = seeds[(seeds['Season'] == season) & (seeds['TeamID'] == team_id)]
     if len(seed_row) == 0:
@@ -181,17 +147,13 @@ class MarchMadnessPreprocessor:
     matchup_features = []
     tr = self.data['tourney_results']
 
-    for _, game in tr.iterrows():
+    for idx, game in tr.iterrows():
         season = int(game['Season'])
         w = int(game['WTeamID'])
         l = int(game['LTeamID'])
 
-        # FIXED: Always put lower ID as Team1, higher ID as Team2 (consistent ordering)
-        # This way features and labels are aligned!
-        team1 = min(w, l)  # Lower ID
-        team2 = max(w, l)  # Higher ID
-        
-        # Outcome: 1 if Team1 (lower ID) won, 0 if Team2 (higher ID) won
+        team1 = min(w, l)
+        team2 = max(w, l)
         outcome = 1 if team1 == w else 0
 
         t1_stats = self.season_stats[(self.season_stats['Season'] == season) &
@@ -203,101 +165,60 @@ class MarchMadnessPreprocessor:
         t1_stats = t1_stats.iloc[0]
         t2_stats = t2_stats.iloc[0]
 
-        # Get seeds for the correctly ordered teams
         t1_seed = self.get_team_seed(season, team1)
         t2_seed = self.get_team_seed(season, team2)
 
         features = {
             'Season': season,
-            'Team1': team1,  # Lower TeamID
-            'Team2': team2,  # Higher TeamID
-
+            'Team1': team1,
+            'Team2': team2,
             'Team1_WinPct': t1_stats['WinPct'],
             'Team2_WinPct': t2_stats['WinPct'],
             'WinPct_Diff': t1_stats['WinPct'] - t2_stats['WinPct'],
-            
             'Team1_AvgPointsFor': t1_stats['AvgPointsFor'],
             'Team2_AvgPointsFor': t2_stats['AvgPointsFor'],
             'PointsFor_Diff': t1_stats['AvgPointsFor'] - t2_stats['AvgPointsFor'],
-            
             'Team1_AvgPointsAgainst': t1_stats['AvgPointsAgainst'],
             'Team2_AvgPointsAgainst': t2_stats['AvgPointsAgainst'],
             'PointsAgainst_Diff': t1_stats['AvgPointsAgainst'] - t2_stats['AvgPointsAgainst'],
-            
             'Team1_AvgScoreDiff': t1_stats['AvgScoreDiff'],
             'Team2_AvgScoreDiff': t2_stats['AvgScoreDiff'],
             'ScoreDiff_Diff': t1_stats['AvgScoreDiff'] - t2_stats['AvgScoreDiff'],
-            
             'Team1_Games': t1_stats['Games'],
             'Team2_Games': t2_stats['Games'],
-
-            # Seed features (critical for March Madness!)
-            'Team1_Seed': t1_seed if t1_seed is not None else 16,  # default to 16 if missing
+            'Team1_Seed': t1_seed if t1_seed is not None else 16,
             'Team2_Seed': t2_seed if t2_seed is not None else 16,
             'Seed_Diff': (t1_seed if t1_seed else 16) - (t2_seed if t2_seed else 16),
-
-            'Outcome': outcome,  # 1 if Team1 won, 0 if Team2 won
+            'Outcome': outcome,
         }
         matchup_features.append(features)
 
     return pd.DataFrame(matchup_features)
 
   def apply_pca(self, X, n_components=None, variance_threshold=0.95, random_state=0, return_models=False):
-    """
-    Run PCA on numeric columns of X.
-    - Standardizes numeric columns with z-score (mean=0, std=1)
-    - If n_components is None, chooses the smallest k s.t. cumulative explained variance >= variance_threshold
-    - Stores fitted scaler/PCA/columns for later use in self.pca_state
-    - Returns a DataFrame of PCs (PC1..PCk). Optionally also returns (scaler, pca).
-
-    Parameters
-    ----------
-    X : pd.DataFrame
-        Input features (may include non-numeric columns; only numeric are PCA'd).
-    n_components : int or None
-        If provided, fix the number of components. If None, choose by variance_threshold.
-    variance_threshold : float
-        Target cumulative explained variance (used only when n_components is None).
-    random_state : int
-        Random seed for PCA reproducibility.
-    return_models : bool
-        If True, also return (scaler, pca) along with the PCs DataFrame.
-
-    Returns
-    -------
-    X_pcs : pd.DataFrame
-        Principal components (PC1..PCk).
-    (optional) scaler, pca : fitted StandardScaler and PCA objects
-    """
     if not isinstance(X, pd.DataFrame):
         raise TypeError("X must be a pandas DataFrame")
 
-    # Select numeric columns for PCA
     num_cols = X.select_dtypes(include=[np.number]).columns.tolist()
     if len(num_cols) == 0:
         raise ValueError("No numeric columns found for PCA.")
 
-    # Standardize numeric features
     scaler = StandardScaler(with_mean=True, with_std=True)
     Z = scaler.fit_transform(X[num_cols].values)
 
-    # If n_components not given, determine k by variance_threshold
     if n_components is None:
         pca_full = PCA(random_state=random_state)
         pca_full.fit(Z)
         cumvar = np.cumsum(pca_full.explained_variance_ratio_)
-        k = int(np.searchsorted(cumvar, variance_threshold) + 1)  # smallest k s.t. cumvar >= threshold
-        n_components = max(1, min(k, Z.shape[1]))  # clamp to [1, #features]
+        k = int(np.searchsorted(cumvar, variance_threshold) + 1)
+        n_components = max(1, min(k, Z.shape[1]))
 
-    # Fit final PCA with chosen n_components
     pca = PCA(n_components=n_components, random_state=random_state)
     PCs = pca.fit_transform(Z)
 
-    # Build tidy DataFrame for PCs
     pc_cols = [f"PC{i+1}" for i in range(pca.n_components_)]
     X_pcs = pd.DataFrame(PCs, index=X.index, columns=pc_cols)
 
-    # Persist state for later (e.g., transforming validation/test)
     self.pca_state = {
         "num_cols": num_cols,
         "scaler": scaler,
@@ -311,12 +232,7 @@ class MarchMadnessPreprocessor:
         return X_pcs, scaler, pca
     return X_pcs
 
-
   def transform_with_pca(self, X_new):
-    """
-    Apply previously-fitted scaler/PCA to a new DataFrame (same numeric columns).
-    Returns a DataFrame with the same PC columns used during fit.
-    """
     if not hasattr(self, "pca_state") or self.pca_state is None:
         raise RuntimeError("No PCA state found. Call apply_pca(...) first.")
 
@@ -325,72 +241,53 @@ class MarchMadnessPreprocessor:
     pca = self.pca_state["pca"]
     pc_cols = self.pca_state["pc_cols"]
 
-    # Sanity check: ensure required columns exist
     missing = [c for c in num_cols if c not in X_new.columns]
     if missing:
         raise ValueError(f"X_new is missing columns required by PCA: {missing}")
 
-    # Transform
     Z = scaler.transform(X_new[num_cols].values)
     PCs = pca.transform(Z)
     return pd.DataFrame(PCs, index=X_new.index, columns=pc_cols)
 
   def split_train_test(
     self,
-    features_df: pd.DataFrame,
-    method: str = "season",                 # "season" or "random"
-    train_seasons: Optional[List[int]] = None,      # e.g., list(range(1985, 2023))
-    val_seasons: Optional[List[int]] = None,        # e.g., [2023]
-    test_size: float = 0.2,                 # used only for method="random"
-    random_state: int = 42,
-    stratify: bool = True,
-    exclude_cols: Optional[List[str]] = None        # columns to exclude from X
+    features_df,
+    method="season",
+    train_seasons=None,
+    val_seasons=None,
+    test_size=0.2,
+    random_state=42,
+    stratify=True,
+    exclude_cols=None
 ):
-    """
-    Splits features into train/val.
-    Returns: X_train, X_val, y_train, y_val, meta_train, meta_val, feature_cols
-    where meta_* contains ["Season","Team1","Team2"].
-
-    - method="season": use explicit season lists (train_seasons, val_seasons).
-      If not provided, defaults to train <= 2022, val == 2023 (if present).
-    - method="random": random split with optional stratification by Outcome.
-    """
     if exclude_cols is None:
         exclude_cols = ["Season", "Team1", "Team2", "Outcome"]
 
-    # Basic checks
     for col in ["Season", "Team1", "Team2", "Outcome"]:
         if col not in features_df.columns:
             raise ValueError(f"features_df must contain column '{col}'")
 
-    # Determine feature columns (numeric + any other you want, minus exclude)
     feature_cols = [c for c in features_df.columns if c not in exclude_cols]
 
     if method == "season":
-        # Default seasons if none provided
         if (train_seasons is None) or (val_seasons is None):
-            # sensible default: train = <= 2022, val = 2023 (if exists)
             max_train = 2022
             train_seasons = sorted(features_df["Season"].unique())
             train_seasons = [s for s in train_seasons if s <= max_train]
             val_seasons = [s for s in features_df["Season"].unique() if s == (max_train + 1)]
             if len(val_seasons) == 0:
-                # fallback: last available season as val
                 last = int(features_df["Season"].max())
                 val_seasons = [last]
                 train_seasons = [s for s in features_df["Season"].unique() if s < last]
 
         train_mask = features_df["Season"].isin(train_seasons)
         val_mask   = features_df["Season"].isin(val_seasons)
-
         train_df = features_df.loc[train_mask].copy()
         val_df   = features_df.loc[val_mask].copy()
 
     elif method == "random":
-        # Random split on indices
         y_all = features_df["Outcome"].values
         strat = y_all if (stratify and len(np.unique(y_all)) > 1) else None
-
         idx_train, idx_val = train_test_split(
             features_df.index,
             test_size=test_size,
@@ -402,7 +299,6 @@ class MarchMadnessPreprocessor:
     else:
         raise ValueError("method must be 'season' or 'random'")
 
-    # Build X/y and keep metadata
     X_train = train_df[feature_cols].reset_index(drop=True)
     X_val   = val_df[feature_cols].reset_index(drop=True)
     y_train = train_df["Outcome"].reset_index(drop=True)
@@ -412,7 +308,6 @@ class MarchMadnessPreprocessor:
     meta_train = train_df[meta_cols].reset_index(drop=True)
     meta_val   = val_df[meta_cols].reset_index(drop=True)
 
-    # Save to self for convenience (optional)
     self.split_state = {
         "method": method,
         "feature_cols": feature_cols,
@@ -427,124 +322,70 @@ class MarchMadnessPreprocessor:
     return X_train, X_val, y_train, y_val, meta_train, meta_val, feature_cols
 
   def train_and_evaluate_models(self, X_train, X_val, y_train, y_val):
-    """
-    Train baseline and gradient boosting models, evaluate with log loss.
-    Returns dictionary with model names, predictions, and metrics.
-    """
     results = {}
     
-    print("\n" + "="*60)
-    print("MODEL TRAINING & EVALUATION")
-    print("="*60)
+    print("Training models...")
     
-    # 1) Baseline: Logistic Regression
-    print("\n[1/4] Training Logistic Regression (Baseline)...")
     lr = LogisticRegression(max_iter=1000, random_state=42)
     lr.fit(X_train, y_train)
-    
-    # Evaluate on both train and val
-    y_train_pred_lr = lr.predict_proba(X_train)[:, 1]
     y_val_pred_lr = lr.predict_proba(X_val)[:, 1]
-    
-    train_ll_lr = log_loss(y_train, y_train_pred_lr)
-    val_ll_lr = log_loss(y_val, y_val_pred_lr)
-    acc_lr = accuracy_score(y_val, (y_val_pred_lr >= 0.5).astype(int))
-    auc_lr = roc_auc_score(y_val, y_val_pred_lr)
-    
     results['Logistic Regression'] = {
         'model': lr,
         'predictions': y_val_pred_lr,
-        'train_log_loss': train_ll_lr,
-        'log_loss': val_ll_lr,
-        'accuracy': acc_lr,
-        'auc': auc_lr
+        'log_loss': log_loss(y_val, y_val_pred_lr),
+        'accuracy': accuracy_score(y_val, (y_val_pred_lr >= 0.5).astype(int)),
+        'auc': roc_auc_score(y_val, y_val_pred_lr)
     }
-    print(f"  Train Log Loss: {train_ll_lr:.4f} | Val Log Loss: {val_ll_lr:.4f}")
-    print(f"  Val Accuracy: {acc_lr:.4f} | Val AUC: {auc_lr:.4f}")
     
-    # 2) XGBoost - FIXED: Simplified to reduce overfitting
-    print("\n[2/4] Training XGBoost...")
     xgb_model = xgb.XGBClassifier(
         objective='binary:logistic',
         eval_metric='logloss',
-        learning_rate=0.05,      # Reduced from 0.1
-        max_depth=3,             # Reduced from 5
-        n_estimators=50,         # Reduced from 100
-        subsample=0.8,           # Added regularization
-        colsample_bytree=0.8,    # Added regularization
+        learning_rate=0.05,
+        max_depth=3,
+        n_estimators=50,
+        subsample=0.8,
+        colsample_bytree=0.8,
         random_state=42,
         verbosity=0
     )
     xgb_model.fit(X_train, y_train)
-    
-    # Evaluate on both train and val
-    y_train_pred_xgb = xgb_model.predict_proba(X_train)[:, 1]
     y_val_pred_xgb = xgb_model.predict_proba(X_val)[:, 1]
-    
-    train_ll_xgb = log_loss(y_train, y_train_pred_xgb)
-    val_ll_xgb = log_loss(y_val, y_val_pred_xgb)
-    acc_xgb = accuracy_score(y_val, (y_val_pred_xgb >= 0.5).astype(int))
-    auc_xgb = roc_auc_score(y_val, y_val_pred_xgb)
-    
     results['XGBoost'] = {
         'model': xgb_model,
         'predictions': y_val_pred_xgb,
-        'train_log_loss': train_ll_xgb,
-        'log_loss': val_ll_xgb,
-        'accuracy': acc_xgb,
-        'auc': auc_xgb
+        'log_loss': log_loss(y_val, y_val_pred_xgb),
+        'accuracy': accuracy_score(y_val, (y_val_pred_xgb >= 0.5).astype(int)),
+        'auc': roc_auc_score(y_val, y_val_pred_xgb)
     }
-    print(f"  Train Log Loss: {train_ll_xgb:.4f} | Val Log Loss: {val_ll_xgb:.4f}")
-    print(f"  Val Accuracy: {acc_xgb:.4f} | Val AUC: {auc_xgb:.4f}")
     
-    # 3) LightGBM - FIXED: Simplified to reduce overfitting
-    print("\n[3/4] Training LightGBM...")
     lgb_model = lgb.LGBMClassifier(
         objective='binary',
         metric='binary_logloss',
-        learning_rate=0.05,      # Reduced from 0.1
-        max_depth=3,             # Reduced from 5
-        n_estimators=50,         # Reduced from 100
-        subsample=0.8,           # Added regularization
-        colsample_bytree=0.8,    # Added regularization
+        learning_rate=0.05,
+        max_depth=3,
+        n_estimators=50,
+        subsample=0.8,
+        colsample_bytree=0.8,
         random_state=42,
         verbosity=-1
     )
     lgb_model.fit(X_train, y_train)
-    
-    # Evaluate on both train and val
-    y_train_pred_lgb = lgb_model.predict_proba(X_train)[:, 1]
     y_val_pred_lgb = lgb_model.predict_proba(X_val)[:, 1]
-    
-    train_ll_lgb = log_loss(y_train, y_train_pred_lgb)
-    val_ll_lgb = log_loss(y_val, y_val_pred_lgb)
-    acc_lgb = accuracy_score(y_val, (y_val_pred_lgb >= 0.5).astype(int))
-    auc_lgb = roc_auc_score(y_val, y_val_pred_lgb)
-    
     results['LightGBM'] = {
         'model': lgb_model,
         'predictions': y_val_pred_lgb,
-        'train_log_loss': train_ll_lgb,
-        'log_loss': val_ll_lgb,
-        'accuracy': acc_lgb,
-        'auc': auc_lgb
+        'log_loss': log_loss(y_val, y_val_pred_lgb),
+        'accuracy': accuracy_score(y_val, (y_val_pred_lgb >= 0.5).astype(int)),
+        'auc': roc_auc_score(y_val, y_val_pred_lgb)
     }
-    print(f"  Train Log Loss: {train_ll_lgb:.4f} | Val Log Loss: {val_ll_lgb:.4f}")
-    print(f"  Val Accuracy: {acc_lgb:.4f} | Val AUC: {auc_lgb:.4f}")
     
-    # 4) Summary
-    print("\n[4/4] RESULTS SUMMARY")
-    print("-" * 80)
-    print(f"{'Model':<20} {'Train LL':<12} {'Val LL':<12} {'Gap':<12} {'Accuracy':<12} {'AUC':<12}")
-    print("-" * 80)
+    print(f"{'Model':<20} {'Log Loss':<12} {'Accuracy':<12} {'AUC':<12}")
+    print("-" * 60)
     for name, res in results.items():
-        gap = res['log_loss'] - res['train_log_loss']
-        print(f"{name:<20} {res['train_log_loss']:<12.4f} {res['log_loss']:<12.4f} {gap:<12.4f} {res['accuracy']:<12.4f} {res['auc']:<12.4f}")
-    print("-" * 80)
+        print(f"{name:<20} {res['log_loss']:<12.4f} {res['accuracy']:<12.4f} {res['auc']:<12.4f}")
     
-    # Find best model by log loss
     best_model = min(results.items(), key=lambda x: x[1]['log_loss'])
-    print(f"\n[BEST] Model: {best_model[0]} (Log Loss: {best_model[1]['log_loss']:.4f})")
+    print(f"\nBest Model: {best_model[0]} (Log Loss: {best_model[1]['log_loss']:.4f})")
     
     return results
 
@@ -671,48 +512,27 @@ class MarchMadnessPreprocessor:
     return eda_path
 
   def save_results(self, results, X_val, y_val, meta_val, output_dir='output'):
-    """
-    Save all results to files:
-    - Predictions CSV
-    - Metrics JSON
-    - Trained models (pickle)
-    - Feature importance (for tree models)
-    """
-    # Create output directory
     output_path = Path(output_dir)
     output_path.mkdir(exist_ok=True)
     
-    # Clean up old output files (keep only the latest run)
-    print("\n[CLEANUP] Removing old output files...")
-    for old_file in output_path.glob("*_*.csv"):
-        old_file.unlink()
-    for old_file in output_path.glob("*_*.json"):
-        old_file.unlink()
-    for old_file in output_path.glob("*_*.pkl"):
-        old_file.unlink()
-    for old_file in output_path.glob("*_*.txt"):
-        old_file.unlink()
-    print("[OK] Old files removed")
+    for f in output_path.glob("*_*.csv"):
+        f.unlink()
+    for f in output_path.glob("*_*.json"):
+        f.unlink()
+    for f in output_path.glob("*_*.pkl"):
+        f.unlink()
+    for f in output_path.glob("*_*.txt"):
+        f.unlink()
     
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     
-    print("\n" + "="*60)
-    print("SAVING RESULTS")
-    print("="*60)
-    
-    # 1) Save predictions for each model
     predictions_df = meta_val.copy()
     predictions_df['Actual'] = y_val.values
-    
     for model_name, res in results.items():
         col_name = model_name.replace(' ', '_')
         predictions_df[f'Pred_{col_name}'] = res['predictions']
+    predictions_df.to_csv(output_path / f'predictions_{timestamp}.csv', index=False)
     
-    pred_file = output_path / f'predictions_{timestamp}.csv'
-    predictions_df.to_csv(pred_file, index=False)
-    print(f"[OK] Saved predictions: {pred_file}")
-    
-    # 2) Save metrics summary
     metrics = {}
     for model_name, res in results.items():
         metrics[model_name] = {
@@ -720,167 +540,89 @@ class MarchMadnessPreprocessor:
             'accuracy': float(res['accuracy']),
             'auc': float(res['auc'])
         }
-    
-    metrics_file = output_path / f'metrics_{timestamp}.json'
-    with open(metrics_file, 'w') as f:
+    with open(output_path / f'metrics_{timestamp}.json', 'w') as f:
         json.dump(metrics, f, indent=2)
-    print(f"[OK] Saved metrics: {metrics_file}")
     
-    # 3) Save trained models
     for model_name, res in results.items():
         model_filename = model_name.replace(' ', '_').lower()
-        model_file = output_path / f'model_{model_filename}_{timestamp}.pkl'
-        
-        with open(model_file, 'wb') as f:
+        with open(output_path / f'model_{model_filename}_{timestamp}.pkl', 'wb') as f:
             pickle.dump(res['model'], f)
-        print(f"[OK] Saved model: {model_file}")
     
-    # 4) Save feature importance (for tree models)
     for model_name, res in results.items():
         model = res['model']
-        
-        # XGBoost
         if isinstance(model, xgb.XGBClassifier):
-            importance = model.feature_importances_
             feat_imp_df = pd.DataFrame({
                 'Feature': X_val.columns,
-                'Importance': importance
+                'Importance': model.feature_importances_
             }).sort_values('Importance', ascending=False)
-            
-            imp_file = output_path / f'feature_importance_xgboost_{timestamp}.csv'
-            feat_imp_df.to_csv(imp_file, index=False)
-            print(f"[OK] Saved XGBoost feature importance: {imp_file}")
-        
-        # LightGBM
+            feat_imp_df.to_csv(output_path / f'feature_importance_xgboost_{timestamp}.csv', index=False)
         elif isinstance(model, lgb.LGBMClassifier):
-            importance = model.feature_importances_
             feat_imp_df = pd.DataFrame({
                 'Feature': X_val.columns,
-                'Importance': importance
+                'Importance': model.feature_importances_
             }).sort_values('Importance', ascending=False)
-            
-            imp_file = output_path / f'feature_importance_lightgbm_{timestamp}.csv'
-            feat_imp_df.to_csv(imp_file, index=False)
-            print(f"[OK] Saved LightGBM feature importance: {imp_file}")
+            feat_imp_df.to_csv(output_path / f'feature_importance_lightgbm_{timestamp}.csv', index=False)
     
-    # 5) Save summary report
-    report_file = output_path / f'summary_report_{timestamp}.txt'
-    with open(report_file, 'w', encoding='utf-8') as f:
-        f.write("="*60 + "\n")
-        f.write("NCAA MARCH MADNESS PREDICTION - RESULTS SUMMARY\n")
-        f.write("="*60 + "\n\n")
+    best_model = min(results.items(), key=lambda x: x[1]['log_loss'])
+    with open(output_path / f'summary_report_{timestamp}.txt', 'w', encoding='utf-8') as f:
+        f.write(f"NCAA MARCH MADNESS PREDICTION - RESULTS SUMMARY\n")
         f.write(f"Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-        f.write(f"Validation Set: {len(y_val)} games\n")
-        f.write(f"Validation Seasons: {sorted(meta_val['Season'].unique())}\n\n")
-        
-        f.write("-"*60 + "\n")
+        f.write(f"Validation Set: {len(y_val)} games\n\n")
         f.write(f"{'Model':<20} {'Log Loss':<12} {'Accuracy':<12} {'AUC':<12}\n")
-        f.write("-"*60 + "\n")
         for model_name, res in results.items():
             f.write(f"{model_name:<20} {res['log_loss']:<12.4f} {res['accuracy']:<12.4f} {res['auc']:<12.4f}\n")
-        f.write("-"*60 + "\n\n")
-        
-        best_model = min(results.items(), key=lambda x: x[1]['log_loss'])
-        f.write(f"[BEST] Model: {best_model[0]}\n")
-        f.write(f"   Log Loss: {best_model[1]['log_loss']:.4f}\n")
-        f.write(f"   Accuracy: {best_model[1]['accuracy']:.4f}\n")
-        f.write(f"   AUC: {best_model[1]['auc']:.4f}\n")
+        f.write(f"\nBest Model: {best_model[0]}\n")
+        f.write(f"Log Loss: {best_model[1]['log_loss']:.4f}\n")
     
-    print(f"[OK] Saved summary report: {report_file}")
-    
-    print("\n" + "="*60)
-    print(f"All results saved to: {output_dir}/ directory")
-    print("="*60)
-    
+    print(f"Results saved to {output_dir}/")
     return output_path
 
 
 def run_eda_only(data_dir='march-machine-learning-mania-2025', output_dir='eda'):
     preprocessor = MarchMadnessPreprocessor(data_dir)
-    
-    # data processing
     preprocessor.load_data()
-    cleaned = preprocessor.clean_data(verbose=True)
+    preprocessor.clean_data(verbose=False)
     preprocessor.data = preprocessor.cleaned
     season_stats = preprocessor.create_season_stats()
     features_df = preprocessor.create_features()
-    # Perform EDA
     eda_path = preprocessor.perform_eda(features_df, season_stats, output_dir=output_dir)
-       
     return preprocessor, features_df, season_stats, eda_path
 
 
 def main():
-    """Main execution function"""
-    print("="*60)
     print("NCAA March Madness Prediction Pipeline")
-    print("="*60)
     
-    # Initialize preprocessor with CORRECT path
     preprocessor = MarchMadnessPreprocessor('march-machine-learning-mania-2025')
-    
-    # 1) Load data
-    print("\n[STEP 1/8] Loading data...")
+    print("Loading data...")
     preprocessor.load_data()
     
-    # 2) Clean data
-    print("\n[STEP 2/8] Cleaning data...")
-    cleaned = preprocessor.clean_data(verbose=True)
+    print("Cleaning data...")
+    preprocessor.clean_data(verbose=False)
     preprocessor.data = preprocessor.cleaned
     
-    # 3) Create season statistics
-    print("\n[STEP 3/8] Creating season statistics...")
+    print("Creating features...")
     season_stats = preprocessor.create_season_stats()
-    print(f"[OK] Season stats shape: {season_stats.shape}")
-    
-    # 4) Create features
-    print("\n[STEP 4/8] Creating matchup features (with SEEDS!)...")
     features_df = preprocessor.create_features()
-    print(f"[OK] Features shape: {features_df.shape}")
-    print(f"[OK] Features: {list(features_df.columns)}")
     
-    # 5) Season-based split (temporal validation) - FIXED: Use larger validation set
-    print("\n[STEP 5/9] Splitting data (temporal validation)...")
+    print("Splitting data...")
     X_tr, X_val, y_tr, y_val, meta_tr, meta_val, feat_cols = preprocessor.split_train_test(
         features_df,
         method="season",
-        train_seasons=list(range(1985, 2021)),  # Train: 1985-2020
-        val_seasons=[2021, 2022, 2023]          # Val: 2021-2023 (more reliable)
+        train_seasons=list(range(1985, 2021)),
+        val_seasons=[2021, 2022, 2023]
     )
-    print(f"[OK] Train: {X_tr.shape}, Val: {X_val.shape}")
-    print(f"[OK] Train label mean: {y_tr.mean():.3f}, Val label mean: {y_val.mean():.3f}")
     
-    # 6) Optional: PCA demo
-    print("\n[STEP 6/9] Applying PCA (dimensionality reduction)...")
+    print("Applying PCA...")
     feature_cols = [c for c in features_df.columns if c not in ["Season", "Team1", "Team2", "Outcome"]]
     train_df = features_df[features_df["Season"] <= 2020]
     val_df = features_df[features_df["Season"].isin([2021, 2022, 2023])]
-    
     pcs_train = preprocessor.apply_pca(train_df[feature_cols], variance_threshold=0.95)
     pcs_val = preprocessor.transform_with_pca(val_df[feature_cols])
     
-    print(f"[OK] PCA Train: {pcs_train.shape}, PCA Val: {pcs_val.shape}")
-    print(f"[OK] Cumulative variance explained: {preprocessor.pca_state['cumulative_variance_'][-1]:.3f}")
-    
-    # 7) Train and evaluate models
-    print("\n[STEP 7/9] Training and evaluating models...")
     results = preprocessor.train_and_evaluate_models(X_tr, X_val, y_tr, y_val)
+    preprocessor.save_results(results, X_val, y_val, meta_val, output_dir='output')
     
-    # 8) Save all results to files
-    print("\n[STEP 8/9] Saving results to files...")
-    output_dir = preprocessor.save_results(results, X_val, y_val, meta_val, output_dir='output')
-    
-    print("\n" + "="*60)
-    print("[SUCCESS] PIPELINE COMPLETE!")
-    print("="*60)
-    print("\n[RESULTS] Saved in: output/ directory")
-    print("\nFiles created:")
-    print("  - predictions_YYYYMMDD_HHMMSS.csv      - All model predictions")
-    print("  - metrics_YYYYMMDD_HHMMSS.json         - Performance metrics")
-    print("  - model_*.pkl                          - Trained models")
-    print("  - feature_importance_*.csv             - Feature rankings")
-    print("  - summary_report_YYYYMMDD_HHMMSS.txt   - Text summary")
-    
+    print("Pipeline complete!")
     return preprocessor, X_tr, X_val, y_tr, y_val, meta_tr, meta_val, results
 
 
